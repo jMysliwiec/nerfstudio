@@ -66,6 +66,7 @@ def _render_trajectory_video(
     cameras: Cameras,
     output_filename: Path,
     rendered_output_names: List[str],
+    output_image_filenames: Optional[List[str]] = None,
     crop_data: Optional[CropData] = None,
     rendered_resolution_scaling_factor: float = 1.0,
     seconds: float = 5.0,
@@ -158,11 +159,15 @@ def _render_trajectory_video(
                     render_image.append(output_image)
                 render_image = np.concatenate(render_image, axis=1)
                 if output_format == "images":
+                    if output_image_filenames:
+                        output_image_filename = output_image_filenames[camera_idx]
+                    else:
+                        output_image_filename = f"{camera_idx:05d}"
                     if image_format == "png":
-                        media.write_image(output_image_dir / f"{camera_idx:05d}.png", render_image, fmt="png")
+                        media.write_image(output_image_dir / (output_image_filename + ".png"), render_image, fmt="png")
                     if image_format == "jpeg":
                         media.write_image(
-                            output_image_dir / f"{camera_idx:05d}.jpg", render_image, fmt="jpeg", quality=jpeg_quality
+                            output_image_dir / (output_image_filename + ".jpg"), render_image, fmt="jpeg", quality=jpeg_quality
                         )
                 if output_format == "video":
                     if writer is None:
@@ -452,11 +457,52 @@ class SpiralRender(BaseRender):
         )
 
 
+
+@dataclass
+class EvalRenderer(BaseRender):
+    """Render the percpectives corresponding to the eval/train images."""
+
+    rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
+    """Name of the renderer outputs to use. rgb, depth, etc. concatenates them along y axis"""
+    pose_source: Literal["eval", "train"] = "eval"
+    """Pose source to render."""
+
+    def main(self) -> None:
+        """Main function."""
+        _, pipeline, _, _ = eval_setup(
+            self.load_config,
+            eval_num_rays_per_chunk=self.eval_num_rays_per_chunk,
+            test_mode="test",
+        )
+
+        if self.pose_source == "eval":
+            assert pipeline.datamanager.eval_dataset is not None
+            cameras = pipeline.datamanager.eval_dataset.cameras
+            names = [path.stem for path in pipeline.datamanager.eval_dataset.image_filenames]
+        else:
+            assert pipeline.datamanager.train_dataset is not None
+            cameras = pipeline.datamanager.train_dataset.cameras
+            names = [path.stem for path in pipeline.datamanager.train_dataset.image_filenames]
+
+
+        _render_trajectory_video(
+            pipeline,
+            cameras,
+            output_filename=self.output_path,
+            output_image_filenames=names,
+            rendered_output_names=self.rendered_output_names,
+            rendered_resolution_scaling_factor=1.0 / self.downscale_factor,
+            output_format="images",
+            colormap_options=self.colormap_options,
+        )
+
+
 Commands = tyro.conf.FlagConversionOff[
     Union[
         Annotated[RenderCameraPath, tyro.conf.subcommand(name="camera-path")],
         Annotated[RenderInterpolated, tyro.conf.subcommand(name="interpolate")],
         Annotated[SpiralRender, tyro.conf.subcommand(name="spiral")],
+        Annotated[EvalRenderer, tyro.conf.subcommand(name="eval")],
     ]
 ]
 
